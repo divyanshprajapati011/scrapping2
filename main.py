@@ -148,11 +148,17 @@ def create_users_table():
     conn.close()
 
 def add_user(username, password):
+    if not username or not password:  # safeguard
+        return
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO users(username,password) VALUES(%s,%s) ON CONFLICT DO NOTHING;", (username,password))
+    cur.execute(
+        "INSERT INTO users(username,password) VALUES(%s,%s) ON CONFLICT DO NOTHING;",
+        (username, password)
+    )
     conn.commit()
     conn.close()
+
 
 def check_user(username, password):
     conn = get_conn()
@@ -226,3 +232,4 @@ elif choice == "Scraper":
         scraper_page()
     else:
         st.warning("⚠️ Please login first")
+
