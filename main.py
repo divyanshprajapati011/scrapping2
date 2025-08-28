@@ -261,19 +261,21 @@ def scrape_maps(query, limit=50, email_lookup=True):
             try:
                 name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=4000)
             except Exception:
-                # one more attempt
                 try:
                     page.wait_for_timeout(700)
                     name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=3000)
                 except Exception:
                     continue
-
-            # Duplicate guard
-            # कभी-कभी same card दो बार click हो जाता है
-            if name == last_name:
-                continue
-            last_name = name
-
+            
+            # Category
+            category = ""
+            try:
+                cat = page.locator('//button[contains(@jsaction,"pane.rating.category")]').first
+                if cat.count():
+                    category = cat.inner_text(timeout=2000)
+            except Exception:
+                pass
+            
             # Website
             website = ""
             try:
@@ -282,7 +284,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
                     website = w.get_attribute("href") or ""
             except Exception:
                 pass
-
+            
             # Address
             address = ""
             try:
@@ -291,7 +293,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
                     address = a.inner_text(timeout=1500)
             except Exception:
                 pass
-
+            
             # Phone (from maps panel)
             phone_maps = ""
             try:
@@ -300,17 +302,25 @@ def scrape_maps(query, limit=50, email_lookup=True):
                     phone_maps = ph.inner_text(timeout=1500)
             except Exception:
                 pass
-
+            
             # Rating
             rating = ""
             try:
-                star = page.locator('//span[@role="img" and contains(@aria-label,"stars")]').first
-                if star.count():
-                    aria = star.get_attribute("aria-label") or ""
-                    m = re.search(r"(\d+(?:\.\d+)?)", aria)
-                    rating = m.group(1) if m else ""
+                r = page.locator('//span[@class="MW4etd"]').first
+                if r.count():
+                    rating = r.inner_text(timeout=1500)
             except Exception:
                 pass
+            
+            # Review Count
+            review_count = ""
+            try:
+                rc = page.locator('//span[contains(@class,"UY7F9")]').first
+                if rc.count():
+                    review_count = rc.inner_text(timeout=1500)
+            except Exception:
+                pass
+
 
             # De-dup by (name + address)
             key = (name.strip(), address.strip())
@@ -328,12 +338,14 @@ def scrape_maps(query, limit=50, email_lookup=True):
 
             rows.append({
                 "Business Name": name,
+                "Category": category,
                 "Website": website,
                 "Address": address,
                 "Phone (Maps)": phone_maps,
                 "Phone (Website)": phone_site,
                 "Email (Website)": email_site,
                 "Rating": rating,
+                "Review Count": review_count,
                 "Source (Maps URL)": page.url
             })
 
@@ -470,3 +482,4 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
