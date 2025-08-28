@@ -165,33 +165,15 @@ def scrape_maps(query, limit=50, email_lookup=True):
     try:
         search_url = f"https://www.google.com/maps/search/{requests.utils.quote(query)}"
         page.goto(search_url, timeout=90_000)
-        page.wait_for_timeout(2500)
 
-        # Find the feed panel (works for new/old UI)
+        # Wait for the search results to load
+        page.wait_for_selector('div[role="feed"]', timeout=30000)
+
+        # Find the feed panel
         feed = page.locator('div[role="feed"]').first
-        if not feed.count():
-            feed = page.locator('//div[contains(@class,"m6QErb") and @role="region"]').first
-        try:
-            feed.wait_for(state="visible", timeout=10_000)
-        except Exception:
-            pass
 
-        def click_show_more():
-            try:
-                btn = page.locator(
-                    '//button[.//span[contains(text(),"More") or contains(text(),"Show") or contains(text(),"और")]]'
-                ).first
-                if btn.count():
-                    btn.click(timeout=2000)
-                    page.wait_for_timeout(1200)
-            except Exception:
-                pass
-
-        cards = page.locator("div.Nv2PK")
-        for _ in range(2):
-            if cards.count() == 0:
-                page.mouse.wheel(0, 2000)
-                page.wait_for_timeout(600)
+        # Use a more resilient selector for the cards
+        cards = page.locator("div.Nv2PK, div.lgrgJe, div.Nv2PK.tH5jfe.PIXjeb")
 
         prev_count, stagnant = 0, 0
         max_no_growth_cycles = 12
@@ -205,8 +187,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
                     page.wait_for_timeout(450)
             except Exception:
                 page.mouse.wheel(0, 4000)
-
-            click_show_more()
 
             try:
                 cur = cards.count()
@@ -237,19 +217,22 @@ def scrape_maps(query, limit=50, email_lookup=True):
                 card.scroll_into_view_if_needed()
                 card.click(timeout=4000)
                 page.wait_for_timeout(1200)
-            except Exception:
+            except Exception as e:
+                st.error(f"Failed to click card {i}: {e}")
                 continue
 
             # Identify the detail pane to scope all subsequent searches
             detail_pane = page.locator('div[jsaction^="pane.place.title"]').first
             if not detail_pane.count():
+                st.warning(f"Failed to find detail pane for card {i}")
                 continue
 
             # Name (scoped to the detail pane)
             name = ""
             try:
                 name = detail_pane.locator('h1.DUwDvf').inner_text(timeout=3000)
-            except Exception:
+            except Exception as e:
+                st.warning(f"Could not extract name for card {i}: {e}")
                 continue
                 
             # Category (scoped)
@@ -484,3 +467,4 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+�
