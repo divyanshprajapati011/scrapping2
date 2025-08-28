@@ -255,17 +255,35 @@ def scrape_maps(query, limit=50, email_lookup=True):
                 page.wait_for_timeout(1200)  # details load
             except Exception:
                 continue
-
-            # Name
-            name = ""
+            
+            # Wait until new detail panel loads (name changes)
             try:
-                name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=4000)
+                page.wait_for_selector('//h1[contains(@class,"DUwDvf")]', timeout=5000)
             except Exception:
-                try:
-                    page.wait_for_timeout(700)
-                    name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=3000)
-                except Exception:
-                    continue
+                continue
+            
+            # Name
+            try:
+                name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=3000)
+            except:
+                continue
+            
+            # Rating
+            rating = ""
+            try:
+                page.wait_for_selector('//span[contains(@class,"MW4etd")]', timeout=2000)
+                rating = page.locator('//span[contains(@class,"MW4etd")]').first.inner_text()
+            except:
+                pass
+            
+            # Review Count
+            review_count = ""
+            try:
+                page.wait_for_selector('//span[contains(@class,"UY7F9")]', timeout=2000)
+                review_count = page.locator('//span[contains(@class,"UY7F9")]').first.inner_text()
+            except:
+                pass
+
             
             # Category
             category = ""
@@ -302,24 +320,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
                     phone_maps = ph.inner_text(timeout=1500)
             except Exception:
                 pass
-            
-            # Rating
-            rating = ""
-            try:
-                rating_elem = page.locator('//span[contains(@class,"MW4etd")]').first
-                if rating_elem.count():
-                    rating = rating_elem.inner_text(timeout=1500)
-            except Exception:
-                pass
-            
-            # Review Count
-            review_count = ""
-            try:
-                rc_elem = page.locator('//span[contains(@class,"UY7F9")]').first
-                if rc_elem.count():
-                    review_count = rc_elem.inner_text(timeout=1500)
-            except Exception:
-                pass
+
 
 
             # De-dup by (name + address)
@@ -482,6 +483,7 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
 
 
 
