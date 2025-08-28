@@ -11,3 +11,9 @@ beautifulsoup4
 playwright
 playwright
 playwright-stealth
+streamlit
+psycopg2-binary
+bcrypt
+pandas
+requests
+playwright
