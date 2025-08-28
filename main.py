@@ -1,10 +1,15 @@
 import streamlit as st
 import psycopg2
+import bcrypt
 import pandas as pd
-import time, re, requests
+import time
+import re
+import requests
 from playwright.sync_api import sync_playwright
 
-# ---------- DB CONFIG ----------
+# -------------------
+# DB CONFIG (Supabase)
+# -------------------
 DB_CONFIG = {
     "user": "postgres.jsjlthhnrtwjcyxowpza",
     "password": "@Deep7067",
@@ -14,227 +19,228 @@ DB_CONFIG = {
     "sslmode": "require"
 }
 
-# ---------- Email/Phone Extract ----------
-EMAIL_REGEX = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
-PHONE_REGEX = r"\+?\d[\d\-\(\) ]{8,}\d"
+# -------------------
+# Database Functions
+# -------------------
+def get_connection():
+    return psycopg2.connect(**DB_CONFIG)
 
+def create_table():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+    );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def add_user(username, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+    cur.execute(
+        "INSERT INTO users(username,password) VALUES(%s,%s) ON CONFLICT DO NOTHING;",
+        (username, hashed_pw.decode("utf-8")),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def verify_user(username, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT password FROM users WHERE username=%s;", (username,))
+    result = cur.fetchone()
+    cur.close()
+    conn.close()
+    if result:
+        stored_pw = result[0]
+        return bcrypt.checkpw(password.encode("utf-8"), stored_pw.encode("utf-8"))
+    return False
+
+# -------------------
+# Helper Function
+# -------------------
 def extract_email_phone(website_url):
+    """Website से email और phone निकालने की कोशिश"""
     try:
-        resp = requests.get(website_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-        text = resp.text
-        emails = re.findall(EMAIL_REGEX, text)
-        phones = re.findall(PHONE_REGEX, text)
-        return (emails[0] if emails else ""), (phones[0] if phones else "")
+        html = requests.get(website_url, timeout=5).text
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", html)
+        phones = re.findall(r"\+?\d[\d\-\s]{8,}\d", html)
+        email = emails[0] if emails else ""
+        phone = phones[0] if phones else ""
+        return email, phone
     except:
         return "", ""
 
-# ---------- Scraper ----------
-def scrape_maps(url, limit=50, email_lookup=True):
+# -------------------
+# Playwright Scraper
+# -------------------
+def scrape_maps(query, limit=50, lookup=True):
     rows = []
+    fetched = 0
+    progress = st.progress(0)
+    status_text = st.empty()
+    start_time = time.time()
+    times = []
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox","--disable-dev-shm-usage","--disable-gpu",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
+        browser = p.chromium.launch(headless=True,
+                                    args=["--no-sandbox", "--disable-dev-shm-usage"])
         context = browser.new_context()
         page = context.new_page()
-        page.goto(url, timeout=60000)
+        page.goto("https://www.google.com/maps", timeout=60000)
+        page.fill("input#searchboxinput", query)
+        page.click("button#searchbox-searchbutton")
+        page.wait_for_timeout(5000)
 
-        cards = page.locator('//a[contains(@href,"/maps/place")]')
-        seen = set()
+        # Scroll करके results load करना
+        scrollable = page.locator("div[role='feed']")
+        prev_height = 0
+        while fetched < limit:
+            page.mouse.wheel(0, 10000)
+            page.wait_for_timeout(2000)
+            curr_height = scrollable.evaluate("el => el.scrollHeight")
+            if curr_height == prev_height:  # कोई नया result नहीं मिला
+                break
+            prev_height = curr_height
 
-        progress = st.progress(0)
-        status_text = st.empty()
-        start_time = time.time()
-        times = []
-
-        while len(rows) < limit:
-            count = cards.count()
-            for i in range(count):
-                if len(rows) >= limit: break
+            results = page.locator("div[role='article']").all()
+            for r in results:
+                if fetched >= limit:
+                    break
                 try:
-                    card = cards.nth(i)
-                    link = card.get_attribute("href")
-                    if not link or link in seen: continue
-                    seen.add(link)
+                    name = r.locator("div[role='heading']").inner_text()
+                except:
+                    name = ""
+                try:
+                    rating = r.locator("span[aria-label*='stars']").first.inner_text()
+                except:
+                    rating = ""
+                try:
+                    reviews = r.locator("span:has-text('reviews')").inner_text()
+                except:
+                    reviews = ""
+                try:
+                    category = r.locator("span[jsinstance]").nth(1).inner_text()
+                except:
+                    category = ""
 
-                    card.click()
-                    page.wait_for_timeout(2000)
-
-                    # ---- extract details ----
-                    try: name = page.locator('//h1[contains(@class,"fontHeadlineLarge")]').inner_text()
-                    except: name = ""
-
-                    try: rating = page.locator('//span[@aria-label[contains(.,"star")]]').first.inner_text()
-                    except: rating = ""
-
+                # क्लिक करके detail निकालना
+                try:
+                    r.click()
+                    page.wait_for_timeout(3000)
                     try:
-                        rev_text = page.locator('//span[contains(text(),"reviews")]').first.inner_text()
-                        reviews = re.search(r"(\d[\d,]*)", rev_text).group(1)
-                    except: reviews = ""
+                        address = page.locator("button[data-item-id*='address']").inner_text()
+                    except:
+                        address = ""
+                    try:
+                        phone_maps = page.locator("button[data-item-id*='phone']").inner_text()
+                    except:
+                        phone_maps = ""
+                    try:
+                        website = page.locator("a[data-item-id*='authority']").get_attribute("href")
+                    except:
+                        website = ""
+                except:
+                    address, phone_maps, website = "", "", ""
 
-                    try: address = page.locator('//button[contains(@aria-label,"Address")]').inner_text()
-                    except: address = ""
+                email_site, phone_site = "", ""
+                if lookup and website:
+                    email_site, phone_site = extract_email_phone(website)
 
-                    try: phone_maps = page.locator('//button[contains(@aria-label,"Phone:")]').inner_text()
-                    except: phone_maps = ""
+                rows.append({
+                    "Business Name": name,
+                    "Address": address,
+                    "Phone (Maps)": phone_maps,
+                    "Phone (Website)": phone_site,
+                    "Email (Website)": email_site,
+                    "Website": website,
+                    "Rating": rating,
+                    "Reviews": reviews,
+                    "Category": category,
+                    "Source Link": page.url
+                })
 
-                    try: website = page.locator('//a[contains(@aria-label,"Website:")]').get_attribute("href")
-                    except: website = ""
+                fetched += 1
 
-                    try: category = page.locator('//button[contains(@aria-label,"Category:")]').inner_text()
-                    except: category = ""
-
-                    email_site, phone_site = "", ""
-                    if email_lookup and website:
-                        email_site, phone_site = extract_email_phone(website)
-
-                    # ---- Save row ----
-                    rows.append({
-                        "Business Name": name,
-                        "Address": address,
-                        "Phone (Maps)": phone_maps,
-                        "Phone (Website)": phone_site,
-                        "Email (Website)": email_site,
-                        "Website": website,
-                        "Rating": rating,
-                        "Reviews": reviews,
-                        "Category": category,
-                        "Source Link": link
-                    })
-
-                    # ETA update
-                    t1 = time.time()
-                    times.append(t1 - start_time)
-                    avg_time = sum(times) / len(times)
-                    remaining = limit - len(rows)
-                    eta_sec = int(avg_time * remaining)
-
-                    progress.progress(int(len(rows) / limit * 100))
-                    status_text.text(f"Scraping {len(rows)}/{limit} ... ⏳ ETA: {eta_sec}s")
-
-                except Exception as e:
-                    continue
-
-            page.mouse.wheel(0, 2000)
-            time.sleep(2)
-            cards = page.locator('//a[contains(@href,"/maps/place")]')
+                # ETA
+                t1 = time.time()
+                times.append(t1 - start_time)
+                avg_time = sum(times) / len(times)
+                remaining = limit - fetched
+                eta_sec = int(avg_time * remaining)
+                progress.progress(int(fetched / limit * 100))
+                status_text.text(
+                    f"Scraping {fetched}/{limit} businesses... ⏳ ETA: {eta_sec}s"
+                )
 
         browser.close()
 
     progress.empty()
     total_time = int(time.time() - start_time)
-    status_text.success(f"✅ Scraping complete in {total_time}s! ({len(rows)} results)")
+    status_text.success(f"✅ Scraping complete in {total_time}s! (Got {len(rows)} results)")
+
     return pd.DataFrame(rows)
 
-# ---------- DB Setup ----------
-def get_conn():
-    return psycopg2.connect(**DB_CONFIG)
+# -------------------
+# Streamlit UI
+# -------------------
+def main():
+    st.title("🔐 Google Maps Scraper (Playwright) + Auth")
 
-def create_users_table():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    email TEXT NOT NULL
-    );
-    """)
-    conn.commit()
-    conn.close()
+    create_table()
 
-def add_user(username, email, password):
-    if not username or not password:  # safeguard
-        return
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO users(username,email,password) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING;",
-        (username,email,password)
-    )
-    conn.commit()
-    conn.close()
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.username = ""
 
+    menu = ["Login", "Signup"]
+    choice = st.sidebar.selectbox("Menu", menu)
 
-def check_user(username, password):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE username=%s AND password=%s;", (username,password))
-    user = cur.fetchone()
-    conn.close()
-    return user
+    if choice == "Signup":
+        st.subheader("Create New Account")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Signup"):
+            if username and password:
+                add_user(username, password)
+                st.success("✅ Account created! Now login.")
+            else:
+                st.error("⚠️ Please enter username & password.")
 
-# ---------- UI Pages ----------
-def home():
-    st.title("🏠 Google Maps Scraper Tool")
-    st.write("➡️ Please Signup or Login to continue")
+    elif choice == "Login":
+        st.subheader("Login to Your Account")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if verify_user(username, password):
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success(f"✅ Welcome {username}!")
+            else:
+                st.error("❌ Invalid Username/Password")
 
-def signup():
-    st.title("🔑 Signup")
-    u = st.text_input("Username")
-    e = st.text_input("email", type="email")
-    p = st.text_input("Password", type="password")
-    if st.button("Signup"):
-        add_user(u,e,p)
-        st.success("✅ Signup successful! Please login now.")
+    if st.session_state.logged_in:
+        st.sidebar.success(f"Logged in as {st.session_state.username}")
+        st.subheader("🔍 Google Maps Scraper")
 
-def login():
-    st.title("🔐 Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-    if st.button("Login"):
-        user = check_user(u, p)
-        if user:
-            st.session_state.logged_in = True
-            st.success("✅ Logged in successfully!")
-        else:
-            st.error("❌ Invalid credentials")
+        query = st.text_input("Enter search query (e.g. restaurants in Delhi)")
+        limit = st.number_input("Number of results", min_value=10, max_value=200, step=10, value=50)
 
-def scraper_page():
-    st.title("🕵️ Google Maps Scraper")
-    query_url = st.text_input("Enter Google Maps Search URL")
-    limit = st.number_input("How many results?", min_value=10, max_value=200, value=50, step=10)
-
-    if st.button("Start Scraping"):
-        if not query_url:
-            st.warning("⚠️ Please enter Google Maps search URL")
-        else:
-            df = scrape_maps(query_url, limit=limit, email_lookup=True)
+        if st.button("Start Scraping"):
+            df = scrape_maps(query, limit)
             st.dataframe(df)
 
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download CSV", csv, "results.csv", "text/csv")
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download CSV", data=csv, file_name="maps_results.csv", mime="text/csv"
+            )
 
-            excel = df.to_excel("results.xlsx", index=False)
-            with open("results.xlsx", "rb") as f:
-                st.download_button("📥 Download Excel", f, "results.xlsx")
-
-# ---------- Main App ----------
-create_users_table()
-
-menu = ["Home", "Signup", "Login", "Scraper"]
-choice = st.sidebar.selectbox("Menu", menu)
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if choice == "Home":
-    home()
-elif choice == "Signup":
-    signup()
-elif choice == "Login":
-    login()
-elif choice == "Scraper":
-    if st.session_state.logged_in:
-        scraper_page()
-    else:
-        st.warning("⚠️ Please login first")
-
-
-
-
+if __name__ == "__main__":
+    main()
