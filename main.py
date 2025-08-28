@@ -21,7 +21,7 @@ def go_to(p):
     st.session_state.page = p
 
 # ================== DB (env vars recommended) ==================
-# अगर तुम सीधे values डालना चाहते हो, नीचे os.getenv(...) की जगह अपनी values रख दो.
+# If you want to use values directly, replace os.getenv(...) below with your values.
 DB_USER = "postgres.jsjlthhnrtwjcyxowpza"
 DB_PASS = "@Deep7067"
 DB_HOST = "aws-1-ap-south-1.pooler.supabase.com"
@@ -84,7 +84,7 @@ def login_user(username, password):
 # ================== PLAYWRIGHT SAFETY NET ==================
 def ensure_chromium_once():
     """
-    Streamlit Cloud/containers पर Chromium install को safe बनाता है.
+    Ensures a safe Chromium install on Streamlit Cloud/containers.
     """
     cache_flag = "/tmp/.chromium_ready"
     if os.path.exists(cache_flag):
@@ -111,8 +111,8 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def fetch_email_phone_from_site(url, timeout=10):
     """
-    Website HTML से email/phone ढूंढता है.
-    साथ में /contact | /about जैसी common pages भी probe करता है.
+    Finds email/phone from website HTML.
+    Also probes common pages like /contact or /about.
     """
     def grab(u):
         try:
@@ -146,8 +146,6 @@ def fetch_email_phone_from_site(url, timeout=10):
     return email, phone
 
 # ================== CORE SCRAPER (DIRECT GOOGLE MAPS) ==================
-# ================== CORE SCRAPER (DIRECT GOOGLE MAPS) ==================
-# ================== CORE SCRAPER (DIRECT GOOGLE MAPS) ==================
 def scrape_maps(query, limit=50, email_lookup=True):
     rows = []
     seen = set()
@@ -158,6 +156,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
     per_item_times = []
 
     # Use session state to manage Playwright instance
+    # This ensures the browser is not closed between Streamlit runs
     if 'playwright' not in st.session_state:
         st.session_state.playwright = sync_playwright().start()
 
@@ -182,6 +181,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
         page.goto(search_url, timeout=90_000)
         page.wait_for_timeout(2500)
 
+        # Find the feed panel (works for new/old UI)
         feed = page.locator('div[role="feed"]').first
         if not feed.count():
             feed = page.locator('//div[contains(@class,"m6QErb") and @role="region"]').first
@@ -210,6 +210,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
         prev_count, stagnant = 0, 0
         max_no_growth_cycles = 12
 
+        # ==== Aggressive scroll till we have >= limit cards ====
         while True:
             try:
                 eh = feed.element_handle()
@@ -238,6 +239,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
         total_cards = cards.count()
         total_to_visit = min(total_cards, limit * 2)
 
+        # ==== Visit each card, open detail & extract ====
         fetched = 0
         
         for i in range(total_to_visit):
@@ -252,16 +254,19 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 continue
 
+            # Identify the detail pane to scope all subsequent searches
             detail_pane = page.locator('div[jsaction^="pane.place.title"]').first
             if not detail_pane.count():
                 continue
 
+            # Name (scoped to the detail pane)
             name = ""
             try:
                 name = detail_pane.locator('h1.DUwDvf').inner_text(timeout=3000)
             except Exception:
                 continue
                 
+            # Category (scoped)
             category = ""
             try:
                 cat = detail_pane.locator('//button[contains(@jsaction,"pane.rating.category")]').first
@@ -270,6 +275,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
             
+            # Website (scoped)
             website = ""
             try:
                 w = detail_pane.locator('//a[@data-item-id="authority"]').first
@@ -278,6 +284,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
             
+            # Address (scoped)
             address = ""
             try:
                 a = detail_pane.locator('//button[@data-item-id="address"]').first
@@ -286,6 +293,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
             
+            # Phone (from maps panel) (scoped)
             phone_maps = ""
             try:
                 ph = detail_pane.locator('//button[starts-with(@data-item-id,"phone:")]').first
@@ -294,8 +302,10 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
                 
+            # Rating & Review Count (scoped to the detail pane)
             rating = ""
             try:
+                # This selector is crucial for scoping the rating to the detail pane
                 rating_elem = detail_pane.locator('span.MW4etd').first
                 if rating_elem.count():
                     rating = rating_elem.inner_text(timeout=1500)
@@ -304,14 +314,17 @@ def scrape_maps(query, limit=50, email_lookup=True):
                 
             review_count = ""
             try:
+                # This selector is crucial for scoping the review count to the detail pane
                 review_count_elem = detail_pane.locator('span.UY7F9').first
                 if review_count_elem.count():
                     review_count = review_count_elem.inner_text(timeout=1500)
             except Exception:
                 pass
 
+            # De-dup by (name + address)
             key = (name.strip(), address.strip())
             if key in seen:
+                # Close the detail pane before continuing to the next card
                 try:
                     close_btn = page.locator('button[jsaction="pane.place.back.back"]').first
                     if close_btn.count():
@@ -322,6 +335,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
                 continue
             seen.add(key)
             
+            # Optional: website se email/extra phone
             email_site, phone_site = "", ""
             t_item0 = time.time()
             if email_lookup and website:
@@ -344,6 +358,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             
             fetched += 1
             
+            # Close the detail pane to ensure a clean state for the next card
             try:
                 close_btn = page.locator('button[jsaction="pane.place.back.back"]').first
                 if close_btn.count():
@@ -352,6 +367,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
 
+            # Progress + ETA
             avg = sum(per_item_times) / len(per_item_times) if per_item_times else 0.8
             remaining = max(0, limit - fetched)
             eta = int(avg * remaining)
@@ -366,7 +382,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
     total_time = int(time.time() - t0)
     status.success(f"✅ Completed in {total_time}s. Got {len(rows)} rows.")
     return pd.DataFrame(rows[:limit])
-    
+
 # ================== DOWNLOAD HELPERS ==================
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
@@ -422,7 +438,7 @@ def page_login():
     st.button("⬅️ Back", on_click=lambda: go_to("home"))
 
 def page_signup():
-    st.title("Signup 📝")
+    st.title("Signup �")
     new_user = st.text_input("Choose Username")
     new_email = st.text_input("Email")
     new_pass = st.text_input("Choose Password", type="password")
@@ -482,9 +498,3 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
-
-
-
-
-
-
