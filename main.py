@@ -467,4 +467,5 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
-�
+
+
