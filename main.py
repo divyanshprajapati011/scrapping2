@@ -152,11 +152,9 @@ def fetch_email_phone_from_site(url, timeout=10):
 def scrape_maps(query, limit=50, email_lookup=True):
     """
     Direct Google Maps scraping via Playwright.
-    - Robust scrolling (virtualized feed).
-    - Click each card → detail page → Name, Website, Address, Phone, Rating, Review Count.
-    - Optional website email/phone extraction.
-    - De-dup by (name + address).
+    Extracts Name, Website, Address, Phone, Rating, Review Count.
     """
+
     rows = []
     seen = set()
 
@@ -182,10 +180,10 @@ def scrape_maps(query, limit=50, email_lookup=True):
         page.goto(search_url, timeout=90_000)
         page.wait_for_timeout(2500)
 
-        # Feed panel पकड़ो
         feed = page.locator('div[role="feed"]').first
         if not feed.count():
             feed = page.locator('//div[contains(@class,"m6QErb") and @role="region"]').first
+
         try:
             feed.wait_for(state="visible", timeout=10_000)
         except Exception:
@@ -202,9 +200,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except Exception:
                 pass
 
-        cards = page.locator("div.Nv2PK")  # listing cards
-
-        # कभी पहले render न हों तो nudge
+        cards = page.locator("div.Nv2PK")
         for _ in range(2):
             if cards.count() == 0:
                 page.mouse.wheel(0, 2000)
@@ -213,7 +209,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
         prev_count, stagnant = 0, 0
         max_no_growth_cycles = 12
 
-        # ==== Aggressive scroll till we have >= limit cards ====
         while True:
             try:
                 eh = feed.element_handle()
@@ -240,10 +235,10 @@ def scrape_maps(query, limit=50, email_lookup=True):
                 break
 
         total_cards = cards.count()
-        total_to_visit = min(total_cards, limit * 2)  # buffer for duplicates
+        total_to_visit = min(total_cards, limit * 2)
 
-        # ==== Visit each card, open detail & extract ====
         fetched = 0
+        last_name = None
 
         for i in range(total_to_visit):
             if fetched >= limit:
@@ -252,20 +247,39 @@ def scrape_maps(query, limit=50, email_lookup=True):
             try:
                 card = cards.nth(i)
                 card.scroll_into_view_if_needed()
-                card.click(timeout=4000)
-                page.wait_for_timeout(1200)  # wait for details to load
             except Exception:
                 continue
 
-            # === Extract fresh detail panel ===
+            # === wait for new detail panel ===
+            old_name = ""
             try:
-                page.wait_for_selector('h1.DUwDvf', timeout=5000)
-                name = page.locator('h1.DUwDvf').inner_text(timeout=3000)
+                old_name = page.locator('h1.DUwDvf').inner_text(timeout=2000)
             except:
+                pass
+
+            try:
+                card.click(timeout=4000)
+                page.wait_for_timeout(1500)
+                page.wait_for_function(
+                    """(oldName) => {
+                        let el = document.querySelector('h1.DUwDvf');
+                        return el && el.innerText && el.innerText.trim() !== oldName?.trim();
+                    }""",
+                    arg=old_name,
+                    timeout=8000
+                )
+            except Exception:
                 continue
 
-            # Category
-            category = ""
+            # === extract details ===
+            name = ""
+            try:
+                name = page.locator('//h1[contains(@class,"DUwDvf")]').inner_text(timeout=4000)
+            except Exception:
+                continue
+
+            category, website, address, phone_maps, rating, review_count = "", "", "", "", "", ""
+
             try:
                 cat = page.locator('//button[contains(@jsaction,"pane.rating.category")]').first
                 if cat.count():
@@ -273,8 +287,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except:
                 pass
 
-            # Website
-            website = ""
             try:
                 w = page.locator('//a[@data-item-id="authority"]').first
                 if w.count():
@@ -282,8 +294,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except:
                 pass
 
-            # Address
-            address = ""
             try:
                 a = page.locator('//button[@data-item-id="address"]').first
                 if a.count():
@@ -291,8 +301,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except:
                 pass
 
-            # Phone
-            phone_maps = ""
             try:
                 ph = page.locator('//button[starts-with(@data-item-id,"phone:")]').first
                 if ph.count():
@@ -300,38 +308,27 @@ def scrape_maps(query, limit=50, email_lookup=True):
             except:
                 pass
 
-            # Rating
-            rating = ""
             try:
-                page.wait_for_selector('span.MW4etd', timeout=3000)
-                rating = page.locator('span.MW4etd').first.inner_text()
+                rating_elem = page.locator('//span[contains(@class,"MW4etd")]').first
+                if rating_elem.count():
+                    rating = rating_elem.inner_text(timeout=1500)
             except:
                 pass
 
-            # Review Count
-            review_count = ""
             try:
-                page.wait_for_selector('span.UY7F9', timeout=3000)
-                review_count = page.locator('span.UY7F9').first.inner_text()
+                rc_elem = page.locator('//span[contains(@class,"UY7F9")]').first
+                if rc_elem.count():
+                    review_count = rc_elem.inner_text(timeout=1500)
             except:
                 pass
 
-            # ✅ Safeguard: avoid duplicate stale values
-            if fetched > 0 and rating == rows[-1]["Rating"] and review_count == rows[-1]["Review Count"]:
-                page.wait_for_timeout(1000)
-                try:
-                    rating = page.locator('span.MW4etd').first.inner_text()
-                    review_count = page.locator('span.UY7F9').first.inner_text()
-                except:
-                    pass
-
-            # === De-dup check ===
+            # === de-dup check ===
             key = (name.strip(), address.strip())
             if key in seen:
                 continue
             seen.add(key)
 
-            # Optional website email/phone extraction
+            # optional site scraping
             email_site, phone_site = "", ""
             t_item0 = time.time()
             if email_lookup and website:
@@ -354,7 +351,6 @@ def scrape_maps(query, limit=50, email_lookup=True):
 
             fetched += 1
 
-            # Progress + ETA
             avg = sum(per_item_times) / len(per_item_times) if per_item_times else 0.8
             remaining = max(0, limit - fetched)
             eta = int(avg * remaining)
@@ -484,3 +480,4 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
