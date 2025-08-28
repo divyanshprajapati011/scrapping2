@@ -306,18 +306,18 @@ def scrape_maps(query, limit=50, email_lookup=True):
             # Rating
             rating = ""
             try:
-                r = page.locator('//span[@class="MW4etd"]').first
-                if r.count():
-                    rating = r.inner_text(timeout=1500)
+                rating_elem = page.locator('//span[contains(@class,"MW4etd")]').first
+                if rating_elem.count():
+                    rating = rating_elem.inner_text(timeout=2000)
             except Exception:
                 pass
             
             # Review Count
             review_count = ""
             try:
-                rc = page.locator('//span[contains(@class,"UY7F9")]').first
-                if rc.count():
-                    review_count = rc.inner_text(timeout=1500)
+                rc_elem = page.locator('//span[contains(@class,"UY7F9")]').first
+                if rc_elem.count():
+                    review_count = rc_elem.inner_text(timeout=2000)
             except Exception:
                 pass
 
@@ -482,4 +482,5 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
 
