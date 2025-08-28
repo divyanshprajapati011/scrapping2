@@ -329,15 +329,18 @@ def scrape_maps(query, limit=50, email_lookup=True):
             per_item_times.append(t_item1 - t_item0)
 
             rows.append({
-                "Business Name": name,
-                "Website": website,
-                "Address": address,
-                "Phone (Maps)": phone_maps,
+                "Business Name": r.get("title"),
+                "Address": r.get("address"),
+                "Phone (Maps)": r.get("phone"),
                 "Phone (Website)": phone_site,
-                "Email (Website)": email_site,
-                "Rating": rating,
-                "Source (Maps URL)": page.url
+                "Email (Website)": email,
+                "Website": r.get("website"),
+                "Rating": r.get("rating"),
+                "Reviews": r.get("reviews") or r.get("reviews_original") or r.get("reviews_count"),
+                "Category": r.get("type"),
+                "Source Link": r.get("link")
             })
+
 
             fetched += 1
 
@@ -472,3 +475,4 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
