@@ -149,11 +149,29 @@ def fetch_email_phone_from_site(url, timeout=10):
     return email, phone
 
 # ================== CORE SCRAPER (DIRECT GOOGLE MAPS) ==================
-from playwright.sync_api import sync_playwright
-import re
 
-def scrape_maps(url, limit=50, email_lookup=True):
-    rows = []
+def build_maps_url(query_or_url: str) -> str:
+    """Return a valid Google Maps URL from user input"""
+    if query_or_url.strip().lower().startswith("http"):
+        return query_or_url.strip()
+    q = requests.utils.quote(query_or_url.strip())
+    return f"https://www.google.com/maps/search/{q}"
+
+
+
+
+
+def scrape_maps(query_or_url, limit=50, email_lookup=True):
+    """
+    Google Maps (Playwright) scraper.
+    - Converts plain query to Maps URL
+    - Aggressive scroll to load enough cards
+    - Click each card, wait for detail pane to change
+    - Extract: Name, Category, Website, Address, Phone, Rating, Review Count
+    - Optional email/phone lookup on website
+    """
+    url = build_maps_url(query_or_url)
+    rows, seen = [], set()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -167,115 +185,183 @@ def scrape_maps(url, limit=50, email_lookup=True):
         )
         context = browser.new_context()
         page = context.new_page()
-        page.goto(url, timeout=60000)
+        page.goto(url, timeout=90_000)
+        page.wait_for_timeout(1500)
 
-        # wait for results list
-        page.wait_for_selector('//div[@role="article"]')
+        # feed panel (new/old UIs)
+        feed = page.locator('div[role="feed"]').first
+        if not feed.count():
+            feed = page.locator('//div[contains(@class,"m6QErb") and @role="region"]').first
 
-        cards = page.locator('//div[@role="article"]').all()
-        for idx, card in enumerate(cards[:limit]):
+        # cards (robust selector variants)
+        cards = page.locator("div.Nv2PK, div.lgrgJe, div.Nv2PK.tH5jfe.PIXjeb")
+
+        # ===== scroll until enough cards are loaded =====
+        prev, stagnant, max_no_growth = 0, 0, 14
+        for _ in range(120):  # hard cap
             try:
-                # scroll card into view
+                eh = feed.element_handle()
+                for __ in range(3):
+                    page.evaluate("(el) => el.scrollBy(0, el.clientHeight)", eh)
+                    page.wait_for_timeout(350)
+            except Exception:
+                page.mouse.wheel(0, 3000)
+
+            cur = 0
+            try:
+                cur = cards.count()
+            except Exception:
+                pass
+
+            if cur > prev:
+                prev, stagnant = cur, 0
+            else:
+                stagnant += 1
+
+            if prev >= limit or stagnant >= max_no_growth:
+                break
+
+        total_cards = cards.count()
+        total_to_visit = min(total_cards, max(limit * 2, limit))  # buffer for dup/closed
+
+        fetched = 0
+        last_name_seen = None
+
+        for i in range(total_to_visit):
+            if fetched >= limit:
+                break
+
+            # ensure the card is in view and clickable
+            try:
+                card = cards.nth(i)
                 card.scroll_into_view_if_needed()
-                page.wait_for_timeout(800)
-
-                # store old values to detect change
-                old_name, old_rating = "", ""
-                try:
-                    old_name = page.locator('h1.DUwDvf').inner_text(timeout=2000)
-                except:
-                    pass
-                try:
-                    old_rating = page.locator('//span[contains(@class,"MW4etd")]').inner_text(timeout=2000)
-                except:
-                    pass
-
-                # click card
-                card.click(timeout=5000)
-                page.wait_for_timeout(1200)
-
-                # wait until detail panel updates (name OR rating changes)
-                try:
-                    page.wait_for_function(
-                        """(oldN, oldR) => {
-                            let nm = document.querySelector('h1.DUwDvf');
-                            let rt = document.querySelector('span.MW4etd');
-                            if (!nm || !rt) return false;
-                            let newN = nm.innerText.trim();
-                            let newR = rt.innerText.trim();
-                            return (newN && newN !== oldN?.trim()) || (newR && newR !== oldR?.trim());
-                        }""",
-                        arg=(old_name, old_rating),
-                        timeout=10000
-                    )
-                except:
-                    pass
-
-                # === extract data ===
-                name, address, phone_maps, rating, review_count, website, email = [""]*7
-
-                try:
-                    name = page.locator('h1.DUwDvf').inner_text()
-                except:
-                    pass
-                try:
-                    address = page.locator('button[data-item-id="address"]').inner_text()
-                except:
-                    pass
-                try:
-                    phone_maps = page.locator('button[data-item-id^="phone:"]').inner_text()
-                except:
-                    pass
-                try:
-                    rating = page.locator('//span[contains(@class,"MW4etd")]').first.inner_text()
-                except:
-                    pass
-                try:
-                    review_count = page.locator('//span[contains(@class,"UY7F9")]').first.inner_text()
-                except:
-                    pass
-                try:
-                    website = page.locator('a[data-item-id="authority"]').get_attribute("href")
-                except:
-                    pass
-
-                # optional: lookup email/phone from website
-                if email_lookup and website:
-                    try:
-                        wp = context.new_page()
-                        wp.goto(website, timeout=10000)
-                        html = wp.content()
-                        match_email = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", html)
-                        if match_email:
-                            email = match_email.group(0)
-                        wp.close()
-                    except:
-                        pass
-
-                rows.append({
-                    "Name": name,
-                    "Address": address,
-                    "Phone (Maps)": phone_maps,
-                    "Phone (Website)": "",
-                    "Email (Website)": email,
-                    "Rating": rating,
-                    "Review Count": review_count,
-                    "Source (Maps URL)": page.url,
-                })
-
-            except Exception as e:
-                print(f"Error on card {idx}: {e}")
+                page.wait_for_timeout(250)
+            except Exception:
                 continue
+
+            # previous name/rating to detect pane change
+            old_name, old_rating = "", ""
+            try:
+                old_name = page.locator('h1.DUwDvf').inner_text(timeout=1000)
+            except Exception:
+                pass
+            try:
+                old_rating = page.locator('span.MW4etd').first.inner_text(timeout=1000)
+            except Exception:
+                pass
+
+            # click and wait for detail to update
+            try:
+                card.click(timeout=5000)
+                page.wait_for_timeout(800)
+                page.wait_for_function(
+                    """(oldN, oldR) => {
+                        const nm = document.querySelector('h1.DUwDvf');
+                        const rt = document.querySelector('span.MW4etd');
+                        const newN = nm && nm.innerText ? nm.innerText.trim() : "";
+                        const newR = rt && rt.innerText ? rt.innerText.trim() : "";
+                        return (newN && newN !== (oldN||"").trim()) || (newR && newR !== (oldR||"").trim());
+                    }""",
+                    arg=(old_name, old_rating),
+                    timeout=10_000
+                )
+                page.wait_for_timeout(400)  # tiny settle
+            except Exception:
+                # if pane didn’t change, try once more
+                try:
+                    card.click(timeout=3000)
+                    page.wait_for_timeout(800)
+                except Exception:
+                    continue
+
+            # ===== extract (scoped to detail pane where possible) =====
+            def safe_text(locator_css_or_xpath, timeout=1500):
+                try:
+                    loc = page.locator(locator_css_or_xpath).first
+                    if loc.count():
+                        return loc.inner_text(timeout=timeout)
+                except Exception:
+                    return ""
+                return ""
+
+            name = safe_text('h1.DUwDvf', 4000)
+            if not name or name == last_name_seen:
+                # if we didn’t really change, skip
+                continue
+            last_name_seen = name
+
+            # category
+            category = safe_text('//button[contains(@jsaction,"pane.rating.category")]')
+
+            # website
+            website = ""
+            try:
+                w = page.locator('a[data-item-id="authority"]').first
+                if w.count():
+                    website = w.get_attribute("href") or ""
+            except Exception:
+                pass
+
+            # address
+            address = safe_text('button[data-item-id="address"]')
+
+            # phone (maps)
+            phone_maps = safe_text('button[data-item-id^="phone:"]')
+
+            # rating – try aria-label stars, else numeric span
+            rating = ""
+            try:
+                star = page.locator('span[role="img"][aria-label*="star"]').first
+                if star.count():
+                    # aria-label like "4.6 stars"
+                    m = re.search(r"(\d+(?:\.\d+)?)", star.get_attribute("aria-label") or "")
+                    if m:
+                        rating = m.group(1)
+            except Exception:
+                pass
+            if not rating:
+                rating = safe_text('span.MW4etd')
+
+            # review count – usually "(591)"
+            review_count = safe_text('span.UY7F9')
+            if review_count:
+                m = re.search(r"(\d[\d,\.]*)", review_count)
+                if m:
+                    review_count = m.group(1).replace(",", "")
+
+            # de-dup (name + address)
+            key = (name.strip(), address.strip())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # optional site email/phone
+            email_site, phone_site = "", ""
+            if email_lookup and website:
+                try:
+                    e, p_ = fetch_email_phone_from_site(website)
+                    email_site, phone_site = e, p_
+                except Exception:
+                    pass
+
+            rows.append({
+                "Business Name": name,
+                "Category": category,
+                "Website": website,
+                "Address": address,
+                "Phone (Maps)": phone_maps,
+                "Phone (Website)": phone_site,
+                "Email (Website)": email_site,
+                "Rating": rating,
+                "Review Count": review_count,
+                "Source (Maps URL)": page.url
+            })
+
+            fetched += 1
 
         browser.close()
 
     return pd.DataFrame(rows[:limit])
-
-    # progress.empty()
-    # total_time = int(time.time() - t0)
-    # status.success(f"✅ Completed in {total_time}s. Got {len(rows)} rows.")
-
-
 # ================== DOWNLOAD HELPERS ==================
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
@@ -391,5 +477,6 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
 
 
