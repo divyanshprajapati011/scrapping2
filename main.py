@@ -272,7 +272,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             try:
                 cat = page.locator('//button[contains(@jsaction,"pane.rating.category")]').first
                 if cat.count():
-                    category = cat.inner_text(timeout=2000)
+                    category = cat.inner_text(timeout=1500)
             except Exception:
                 pass
             
@@ -308,7 +308,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             try:
                 rating_elem = page.locator('//span[contains(@class,"MW4etd")]').first
                 if rating_elem.count():
-                    rating = rating_elem.inner_text(timeout=2000)
+                    rating = rating_elem.inner_text(timeout=1500)
             except Exception:
                 pass
             
@@ -317,7 +317,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             try:
                 rc_elem = page.locator('//span[contains(@class,"UY7F9")]').first
                 if rc_elem.count():
-                    review_count = rc_elem.inner_text(timeout=2000)
+                    review_count = rc_elem.inner_text(timeout=1500)
             except Exception:
                 pass
 
@@ -482,5 +482,6 @@ elif page == "scraper":
     page_scraper()
 else:
     page_home()
+
 
 
