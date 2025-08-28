@@ -134,19 +134,19 @@ def scrape_maps(url, limit=50, email_lookup=True):
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
-def create_users_table():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    email TEXT NOT NULL
-    );
-    """)
-    conn.commit()
-    conn.close()
+# def create_users_table():
+#     conn = get_conn()
+#     cur = conn.cursor()
+#     cur.execute("""
+#     CREATE TABLE users (
+#     id SERIAL PRIMARY KEY,
+#     username TEXT NOT NULL UNIQUE,
+#     password TEXT NOT NULL,
+#     email TEXT NOT NULL
+#     );
+#     """)
+#     conn.commit()
+#     conn.close()
 
 def add_user(username, password):
     if not username or not password:  # safeguard
@@ -233,5 +233,6 @@ elif choice == "Scraper":
         scraper_page()
     else:
         st.warning("⚠️ Please login first")
+
 
 
