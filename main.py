@@ -134,28 +134,28 @@ def scrape_maps(url, limit=50, email_lookup=True):
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
-# def create_users_table():
-#     conn = get_conn()
-#     cur = conn.cursor()
-#     cur.execute("""
-#     CREATE TABLE users (
-#     id SERIAL PRIMARY KEY,
-#     username TEXT NOT NULL UNIQUE,
-#     password TEXT NOT NULL,
-#     email TEXT NOT NULL
-#     );
-#     """)
-#     conn.commit()
-#     conn.close()
+def create_users_table():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    email TEXT NOT NULL
+    );
+    """)
+    conn.commit()
+    conn.close()
 
-def add_user(username, password):
+def add_user(username, email, password):
     if not username or not password:  # safeguard
         return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users(username,password) VALUES(%s,%s) ON CONFLICT DO NOTHING;",
-        (username, password)
+        "INSERT INTO users(username,email,password) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING;",
+        (username,email,password)
     )
     conn.commit()
     conn.close()
@@ -177,9 +177,10 @@ def home():
 def signup():
     st.title("🔑 Signup")
     u = st.text_input("Username")
+    e = st.text_input("email", type="email")
     p = st.text_input("Password", type="password")
     if st.button("Signup"):
-        add_user(u, p)
+        add_user(u,e,p)
         st.success("✅ Signup successful! Please login now.")
 
 def login():
@@ -233,6 +234,7 @@ elif choice == "Scraper":
         scraper_page()
     else:
         st.warning("⚠️ Please login first")
+
 
 
 
