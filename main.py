@@ -138,10 +138,11 @@ def create_users_table():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT
+    CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    email TEXT NOT NULL
     );
     """)
     conn.commit()
@@ -232,4 +233,5 @@ elif choice == "Scraper":
         scraper_page()
     else:
         st.warning("⚠️ Please login first")
+
 
