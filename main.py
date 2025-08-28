@@ -81,28 +81,31 @@ def login_user(username, password):
     cur.close(); db.close()
     return user
 
-# ================== PLAYWRIGHT SAFETY NET ==================
-def ensure_chromium_once():
+# ================== PLAYWRIGHT SETUP WITH CACHE ==================
+@st.cache_resource
+def get_playwright_resources():
     """
-    Ensures a safe Chromium install on Streamlit Cloud/containers.
+    Initializes and caches Playwright, browser, and context to prevent
+    thread-related issues on Streamlit reruns.
     """
-    cache_flag = "/tmp/.chromium_ready"
-    if os.path.exists(cache_flag):
-        return
     try:
-        with sync_playwright() as p:
-            b = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            b.close()
-        open(cache_flag, "w").close()
-    except Exception:
-        try:
-            # Install browser
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            open(cache_flag, "w").close()
-        except Exception as e:
-            st.warning(f"Playwright browser install attempt failed: {e}")
+        # Check if Chromium is already installed by Playwright
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.warning(f"Playwright browser install attempt failed: {e}")
 
-ensure_chromium_once()
+    p = sync_playwright().start()
+    browser = p.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-blink-features=AutomationControlled",
+        ],
+    )
+    context = browser.new_context()
+    return p, browser, context
 
 # ================== SCRAPER UTILS ==================
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -155,26 +158,9 @@ def scrape_maps(query, limit=50, email_lookup=True):
     t0 = time.time()
     per_item_times = []
 
-    # Use session state to manage Playwright instance
-    # This ensures the browser is not closed between Streamlit runs
-    if 'playwright' not in st.session_state:
-        st.session_state.playwright = sync_playwright().start()
-
-    if 'browser' not in st.session_state:
-        st.session_state.browser = st.session_state.playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-
-    if 'context' not in st.session_state:
-        st.session_state.context = st.session_state.browser.new_context()
-
-    page = st.session_state.context.new_page()
+    # Get cached Playwright resources
+    p, browser, context = get_playwright_resources()
+    page = context.new_page()
 
     try:
         search_url = f"https://www.google.com/maps/search/{requests.utils.quote(query)}"
@@ -375,7 +361,7 @@ def scrape_maps(query, limit=50, email_lookup=True):
             status.text(f"Scraping {fetched}/{limit}… ⏳ ETA: {eta}s")
 
     finally:
-        # Close the page, not the entire browser/context, as they are stored in session state
+        # Close the page, not the entire browser/context, as they are stored in cache
         page.close()
 
     progress.empty()
