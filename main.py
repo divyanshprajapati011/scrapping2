@@ -21,19 +21,15 @@ def go_to(p):
     st.session_state.page = p
 
 # ================== DB (use st.secrets in production) ==================
-DB_USER = st.secrets.get("DB_USER", "postgres")
-DB_PASS = st.secrets.get("DB_PASS", "password")
-DB_HOST = st.secrets.get("DB_HOST", "localhost")
-DB_PORT = st.secrets.get("DB_PORT", "5432")
-DB_NAME = st.secrets.get("DB_NAME", "postgres")
+
 
 def get_connection():
     return psycopg2.connect(
-        user=DB_USER,
-        password=DB_PASS,
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
+        user="postgres.fpkyghloouywbxbdmqlp",
+        password="@Deep7067",
+        host="aws-1-ap-south-1.pooler.supabase.com",
+        port="5432",
+        dbname="postgres",
         sslmode="require",
     )
 
@@ -253,3 +249,4 @@ if page == "home": page_home()
 elif page == "login": page_login()
 elif page == "signup": page_signup()
 elif page == "scraper": page_scraper()
+
