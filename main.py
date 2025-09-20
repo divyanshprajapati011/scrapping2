@@ -9,6 +9,7 @@ st.set_page_config(page_title="Maps Scraper", layout="wide")
 
 # ================== PLAYWRIGHT SETUP ==================
 @st.cache_resource
+@st.cache_resource
 def get_browser():
     """Cache Playwright browser (Streamlit reruns safe)."""
     try:
@@ -19,11 +20,9 @@ def get_browser():
     p = sync_playwright().start()
     browser = p.chromium.launch(
         headless=True,
-        executable_path="/usr/bin/chromium-browser",  # for Streamlit Cloud
         args=["--no-sandbox", "--disable-dev-shm-usage"]
     )
     return p, browser
-
 # ================== SCRAPER HELPERS ==================
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"\+?\d[\d\-\(\)\/\. ]{8,}\d")
@@ -135,3 +134,4 @@ def page_scraper():
 
 # Run page
 page_scraper()
+
