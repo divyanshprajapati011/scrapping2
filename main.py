@@ -200,9 +200,10 @@ def page_home():
     c1, c2 = st.columns(2)
     if st.button("🔑 Login", use_container_width=True): go_to("login")
     if st.button("📝 Signup", use_container_width=True): go_to("signup")
-    if st.session_state.logged_in: 
-        st.success("✅ Logged in")
-        if st.button("➡️ Open Scraper", use_container_width=True): go_to("scraper")
+    if st.button("📝 scrapper", use_container_width=True): go_to("scraper")
+    # if st.session_state.logged_in: 
+    #     st.success("✅ Logged in")
+    #     if st.button("➡️ Open Scraper", use_container_width=True): go_to("scraper")
 
 def page_login():
     st.title("Login 🔑")
@@ -224,8 +225,8 @@ def page_signup():
     st.button("⬅️ Back", on_click=lambda: go_to("home"))
 
 def page_scraper():
-    if not st.session_state.logged_in: 
-        st.error("⚠️ Please login first"); return
+    # if not st.session_state.logged_in: 
+    #     st.error("⚠️ Please login first"); return
     st.title("🚀 Google Maps Scraper")
     q = st.text_input("🔎 Enter query", "top coaching in Bhopal")
     n = st.number_input("Results", 10, 100, 30, step=10)
@@ -249,4 +250,5 @@ if page == "home": page_home()
 elif page == "login": page_login()
 elif page == "signup": page_signup()
 elif page == "scraper": page_scraper()
+
 
