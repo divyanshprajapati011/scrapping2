@@ -78,18 +78,11 @@ def login_user(username, password):
 # ================== PLAYWRIGHT SETUP ==================
 @st.cache_resource
 def get_browser():
-    """Cache Playwright browser (Streamlit reruns safe)."""
-    try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    except Exception:
-        pass
-
+    import subprocess, sys
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
-    browser = p.chromium.launch(
-        headless=True,
-        executable_path="/usr/bin/chromium-browser",  # ✅ needed for Streamlit Cloud
-        args=["--no-sandbox", "--disable-dev-shm-usage"]
-    )
+    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
     return p, browser
 
 # ================== SCRAPER ==================
@@ -250,5 +243,6 @@ if page == "home": page_home()
 elif page == "login": page_login()
 elif page == "signup": page_signup()
 elif page == "scraper": page_scraper()
+
 
 
