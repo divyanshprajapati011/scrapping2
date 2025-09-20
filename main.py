@@ -1,122 +1,73 @@
-# app.py
 import streamlit as st
 import pandas as pd
-import io, requests, re, subprocess, sys
-from playwright.sync_api import sync_playwright
+import hashlib, io, requests, re, time
 
 # ================== APP CONFIG ==================
-st.set_page_config(page_title="Maps Scraper", layout="wide")
+st.set_page_config(page_title="Maps Scraper 🚀", layout="wide")
 
-# ================== PLAYWRIGHT SETUP ==================
-@st.cache_resource
-def get_browser():
-    """Cache Playwright browser (Streamlit reruns safe)."""
+# ================== SCRAPER (SERPAPI + EMAIL LOOKUP) ==================
+SERPAPI_KEY = "ea60d7830fc08072d9ab7f9109e10f1150c042719c20e7d8d9b9c6a25e3afe09"
+
+EMAIL_REGEX = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+PHONE_REGEX = r"\+?\d[\d\-\(\) ]{8,}\d"
+
+def extract_email_phone(website_url):
     try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        resp = requests.get(website_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        text = resp.text
+        emails = re.findall(EMAIL_REGEX, text)
+        phones = re.findall(PHONE_REGEX, text)
+        return emails[0] if emails else "", phones[0] if phones else ""
     except Exception:
-        pass
-
-    p = sync_playwright().start()
-    browser = p.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-dev-shm-usage"]
-    )
-    return p, browser
-
-# ================== SCRAPER HELPERS ==================
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"\+?\d[\d\-\(\)\/\. ]{8,}\d")
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-def fetch_email_phone_from_site(url, timeout=10):
-    def grab(u):
-        try:
-            r = requests.get(u, headers=HEADERS, timeout=timeout)
-            if 200 <= r.status_code < 400:
-                html = r.text
-                emails = EMAIL_RE.findall(html)
-                phones = PHONE_RE.findall(html)
-                return set(emails), set(phones)
-        except Exception:
-            pass
-        return set(), set()
-
-    if not url or not url.startswith("http"):
         return "", ""
 
-    emails, phones = grab(url)
-    for path in ["/contact", "/about", "/support"]:
-        e2, p2 = grab(url.rstrip("/") + path)
-        emails |= e2
-        phones |= p2
+def scrape_maps(query, limit=50, lookup=True):
+    url = "https://serpapi.com/search"
+    params = {"engine": "google_maps", "q": query, "type": "search", "api_key": SERPAPI_KEY}
+    rows, fetched, page = [], 0, 1
+    progress = st.progress(0); status_text = st.empty()
+    start_time, times = time.time(), []
 
-    return (next(iter(emails)) if emails else "",
-            next(iter(phones)) if phones else "")
+    while fetched < limit:
+        res = requests.get(url, params=params)
+        data = res.json()
+        local_results = data.get("local_results", [])
+        if not local_results: break
 
-def build_maps_url(q: str) -> str:
-    return q if q.startswith("http") else f"https://www.google.com/maps/search/{requests.utils.quote(q)}"
-
-def scrape_maps(query, limit=30, email_lookup=True):
-    url = build_maps_url(query)
-    rows, seen = [], set()
-    p, browser = get_browser()
-    context = browser.new_context()
-    page = context.new_page()
-    page.goto(url, timeout=60_000)
-
-    # wait for first batch of results
-    page.wait_for_selector("div.Nv2PK", timeout=15000)
-
-    # scroll to load more results
-    for _ in range(6):  # increase for more results
-        page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(2000)
-
-    # now scrape cards
-    cards = page.locator("div.Nv2PK")
-    count = cards.count()
-
-    for i in range(min(count, limit)):
-        try:
-            card = cards.nth(i)
-            card.click(timeout=5000)
-            page.wait_for_timeout(1500)
-
-            name = page.locator('h1.DUwDvf').inner_text(timeout=2000)
-            if not name or (name in seen):
-                continue
-            seen.add(name)
-
-            website = ""
-            if page.locator('a[data-item-id="authority"]').count():
-                website = page.locator('a[data-item-id="authority"]').first.get_attribute("href")
-
-            address = page.locator('button[data-item-id="address"]').inner_text(timeout=1500) if page.locator('button[data-item-id="address"]').count() else ""
-            phone_maps = page.locator('button[data-item-id^="phone:"]').inner_text(timeout=1500) if page.locator('button[data-item-id^="phone:"]').count() else ""
-            rating = page.locator('span.MW4etd').inner_text(timeout=1500) if page.locator('span.MW4etd').count() else ""
-            review_count = page.locator('span.UY7F9').inner_text(timeout=1500) if page.locator('span.UY7F9').count() else ""
-
-            email_site, phone_site = ("","")
-            if email_lookup and website:
-                email_site, phone_site = fetch_email_phone_from_site(website)
+        for r in local_results:
+            if fetched >= limit: break
+            t0 = time.time()
+            email, phone_site = "", ""
+            if lookup and r.get("website"):
+                email, phone_site = extract_email_phone(r["website"])
 
             rows.append({
-                "Business Name": name,
-                "Website": website,
-                "Address": address,
-                "Phone (Maps)": phone_maps,
+                "Business Name": r.get("title"),
+                "Address": r.get("address"),
+                "Phone (Maps)": r.get("phone"),
                 "Phone (Website)": phone_site,
-                "Email (Website)": email_site,
-                "Rating": rating,
-                "Review Count": review_count,
-                "Source URL": page.url
+                "Email (Website)": email,
+                "Website": r.get("website"),
+                "Rating": r.get("rating"),
+                "Reviews": r.get("reviews"),
+                "Category": r.get("type"),
+                "Source Link": r.get("link")
             })
-        except Exception:
-            continue
+            fetched += 1
+            t1 = time.time(); times.append(t1 - t0)
+            avg_time = sum(times) / len(times); remaining = limit - fetched
+            eta_sec = int(avg_time * remaining)
+            progress.progress(int(fetched / limit * 100))
+            status_text.text(f"Scraping {fetched}/{limit} businesses (Page {page})... ⏳ ETA: {eta_sec}s")
 
+        next_url = data.get("serpapi_pagination", {}).get("next")
+        if not next_url or fetched >= limit: break
+        time.sleep(2); url = next_url; params = {}; page += 1
+
+    progress.empty()
+    status_text.success(f"✅ Scraping complete in {int(time.time() - start_time)}s! (Got {len(rows)} results)")
     return pd.DataFrame(rows)
 
-# ================== DOWNLOAD HELPERS ==================
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -126,22 +77,23 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 # ================== MAIN PAGE ==================
 def page_scraper():
-    st.title("🚀 Google Maps Scraper")
-    q = st.text_input("🔎 Enter query", "hospital in Bhopal")
-    n = st.number_input("Results", 10, 100, 30, step=10)
-    lookup = st.checkbox("Also fetch Email/Phone from site", value=True)
+    st.title("🚀 Google Maps Scraper (No Login Required)")
+    query = st.text_input("🔎 Enter your query", "top coaching in Bhopal")
+    max_results = st.number_input("Maximum results", min_value=5, max_value=500, value=50, step=5)
+    do_lookup = st.checkbox("Extract Email & Phone from Website", value=True)
 
     if st.button("Start Scraping"):
-        with st.spinner("⏳ Scraping…"):
+        with st.spinner("⏳ Fetching data from SerpAPI..."):
             try:
-                df = scrape_maps(q, int(n), lookup)
-                st.success(f"✅ Found {len(df)} results.")
-                st.dataframe(df)
-                if not df.empty:
-                    st.download_button("⬇️ CSV", df.to_csv(index=False).encode("utf-8"), "maps.csv")
-                    st.download_button("⬇️ Excel", df_to_excel_bytes(df), "maps.xlsx")
+                df = scrape_maps(query, int(max_results), lookup=do_lookup)
+                st.success(f"✅ Found {len(df)} results."); st.dataframe(df, use_container_width=True)
+                st.download_button("⬇ Download CSV", data=df.to_csv(index=False).encode("utf-8-sig"),
+                                   file_name="maps_scrape.csv", mime="text/csv")
+                st.download_button("⬇ Download Excel", data=df_to_excel_bytes(df),
+                                   file_name="maps_scrape.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except Exception as e:
                 st.error(f"❌ Scraping failed: {e}")
 
-# Run page
+# ================== RUN ==================
 page_scraper()
