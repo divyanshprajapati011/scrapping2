@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import requests, re, io
 from playwright.sync_api import sync_playwright
+
 import time
 
 # ================== APP CONFIG ==================
@@ -48,14 +49,13 @@ def get_browser():
     browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
     return p, browser
 def scrape_maps(query, limit=30, email_lookup=True):
-    """Scrape Google Maps search results with robust scrolling"""
-    url = build_maps_url(query)
     rows, seen = [], set()
-    p, browser = get_browser()
-    context = browser.new_context()
-    page = context.new_page()
-    page.goto(url, timeout=60_000)
-    page.wait_for_timeout(3000)  # initial wait
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(build_maps_url(query), timeout=60_000)
+        page.wait_for_timeout(3000)
 
     # Scroll sidebar to load all cards
     last_count = 0
@@ -156,4 +156,5 @@ if st.button("Start Scraping"):
             st.download_button("⬇️ Download Excel", df_to_excel_bytes(df), "maps.xlsx")
         else:
             st.warning("No results found. Try adjusting the query.")
+
 
