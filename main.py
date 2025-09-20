@@ -101,100 +101,87 @@
 
 
 
-
-
 import streamlit as st
 import pandas as pd
 import time
-import re
 from playwright.sync_api import sync_playwright
 
 st.set_page_config(page_title="Google Maps Scraper 🚀", layout="wide")
-
 st.title("🗺️ Google Maps Scraper (Playwright + Streamlit)")
 
 query = st.text_input("🔎 Enter your query", "Hospitals in Bhopal")
-max_results = st.number_input("Maximum results", min_value=10, max_value=500, value=100, step=10)
-extract_email_phone = st.checkbox("Extract Email & Phone from Website", value=True)
+max_results = st.number_input("Maximum results", min_value=10, max_value=100, value=20, step=5)
 
 if st.button("Start Scraping"):
     st.info("⏳ Scraping in progress... please wait")
-
     results = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)  # headless=False helps debug
         page = browser.new_page()
-        search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
-        page.goto(search_url)
+        page.goto(f"https://www.google.com/maps/search/{query.replace(' ', '+')}")
+        time.sleep(5)  # wait for page to load
 
-        # Scroll loop
-        prev_height = 0
+        last_height = 0
         while len(results) < max_results:
-            page.mouse.wheel(0, 10000)
+            # Scroll down to load more results
+            page.evaluate("window.scrollBy(0, 1000)")
             time.sleep(3)
 
             cards = page.query_selector_all('div[role="article"]')
             for card in cards:
                 try:
-                    name = card.query_selector('div.fontHeadlineSmall').inner_text()
+                    name = card.query_selector('h3 span').inner_text()
                 except:
                     name = None
                 try:
-                    address = card.query_selector('div.fontBodyMedium').inner_text()
+                    address = card.query_selector('span[jsaction="pane.placeActions.moreInformation"]').inner_text()
                 except:
                     address = None
-                try:
-                    phone = card.query_selector('span[aria-label^="+91"]').inner_text()
-                except:
-                    phone = None
 
+                # Skip duplicates
                 if name and not any(r["Business Name"] == name for r in results):
                     results.append({
                         "Business Name": name,
                         "Address": address,
-                        "Phone": phone,
-                        "Website": None,
-                        "Email": None
+                        "Phone": None,
+                        "Website": None
                     })
 
-            # Break if no new data is loading
+                if len(results) >= max_results:
+                    break
+
+            # Break if scroll no longer increases page height
             curr_height = page.evaluate("document.body.scrollHeight")
-            if curr_height == prev_height:
+            if curr_height == last_height:
                 break
-            prev_height = curr_height
+            last_height = curr_height
+
+        # Click each card to get phone/website
+        for i, card in enumerate(cards[:max_results]):
+            try:
+                card.click()
+                time.sleep(2)  # wait for detail panel
+                phone_el = page.query_selector('button[data-tooltip*="Call"]')
+                website_el = page.query_selector('a[data-tooltip*="Visit website"]')
+
+                if phone_el:
+                    results[i]["Phone"] = phone_el.inner_text()
+                if website_el:
+                    results[i]["Website"] = website_el.get_attribute("href")
+            except:
+                continue
 
         browser.close()
 
     df = pd.DataFrame(results)
-
-    # Optional Email/Phone extraction from websites
-    if extract_email_phone:
-        import requests
-        from bs4 import BeautifulSoup
-
-        for i, row in df.iterrows():
-            if row["Website"]:
-                try:
-                    r = requests.get(row["Website"], timeout=5)
-                    soup = BeautifulSoup(r.text, "html.parser")
-                    emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", r.text))
-                    phones = set(re.findall(r"\+91[0-9]{10}", r.text))
-                    if emails:
-                        df.at[i, "Email"] = list(emails)[0]
-                    if phones:
-                        df.at[i, "Phone"] = list(phones)[0]
-                except:
-                    pass
-
     st.success(f"✅ Found {len(df)} results.")
     st.dataframe(df)
 
     # Download buttons
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download CSV", csv, "maps_data.csv", "text/csv")
-
-    excel = df.to_excel("maps_data.xlsx", index=False)
+    st.download_button("⬇ Download CSV", df.to_csv(index=False).encode("utf-8"), "maps_data.csv", "text/csv")
+    with pd.ExcelWriter("maps_data.xlsx", engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
     with open("maps_data.xlsx", "rb") as f:
         st.download_button("⬇ Download Excel", f, "maps_data.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
