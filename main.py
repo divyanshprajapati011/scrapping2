@@ -9,7 +9,6 @@ st.set_page_config(page_title="Maps Scraper", layout="wide")
 
 # ================== PLAYWRIGHT SETUP ==================
 @st.cache_resource
-@st.cache_resource
 def get_browser():
     """Cache Playwright browser (Streamlit reruns safe)."""
     try:
@@ -23,6 +22,7 @@ def get_browser():
         args=["--no-sandbox", "--disable-dev-shm-usage"]
     )
     return p, browser
+
 # ================== SCRAPER HELPERS ==================
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"\+?\d[\d\-\(\)\/\. ]{8,}\d")
@@ -63,17 +63,27 @@ def scrape_maps(query, limit=30, email_lookup=True):
     context = browser.new_context()
     page = context.new_page()
     page.goto(url, timeout=60_000)
-    page.wait_for_timeout(1500)
 
+    # wait for first batch of results
+    page.wait_for_selector("div.Nv2PK", timeout=15000)
+
+    # scroll to load more results
+    for _ in range(6):  # increase for more results
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(2000)
+
+    # now scrape cards
     cards = page.locator("div.Nv2PK")
-    for i in range(min(cards.count(), limit)):
+    count = cards.count()
+
+    for i in range(min(count, limit)):
         try:
             card = cards.nth(i)
             card.click(timeout=5000)
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1500)
 
             name = page.locator('h1.DUwDvf').inner_text(timeout=2000)
-            if not name or (name in seen): 
+            if not name or (name in seen):
                 continue
             seen.add(name)
 
@@ -117,7 +127,7 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 # ================== MAIN PAGE ==================
 def page_scraper():
     st.title("🚀 Google Maps Scraper")
-    q = st.text_input("🔎 Enter query", "top coaching in Bhopal")
+    q = st.text_input("🔎 Enter query", "hospital in Bhopal")
     n = st.number_input("Results", 10, 100, 30, step=10)
     lookup = st.checkbox("Also fetch Email/Phone from site", value=True)
 
@@ -127,11 +137,11 @@ def page_scraper():
                 df = scrape_maps(q, int(n), lookup)
                 st.success(f"✅ Found {len(df)} results.")
                 st.dataframe(df)
-                st.download_button("⬇️ CSV", df.to_csv(index=False).encode("utf-8"), "maps.csv")
-                st.download_button("⬇️ Excel", df_to_excel_bytes(df), "maps.xlsx")
+                if not df.empty:
+                    st.download_button("⬇️ CSV", df.to_csv(index=False).encode("utf-8"), "maps.csv")
+                    st.download_button("⬇️ Excel", df_to_excel_bytes(df), "maps.xlsx")
             except Exception as e:
                 st.error(f"❌ Scraping failed: {e}")
 
 # Run page
 page_scraper()
-
