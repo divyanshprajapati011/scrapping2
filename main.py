@@ -47,19 +47,29 @@ def get_browser():
     p = sync_playwright().start()
     browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
     return p, browser
-
 def scrape_maps(query, limit=30, email_lookup=True):
-    """Scrape Google Maps search results"""
+    """Scrape Google Maps search results with robust scrolling"""
     url = build_maps_url(query)
     rows, seen = [], set()
     p, browser = get_browser()
     context = browser.new_context()
     page = context.new_page()
     page.goto(url, timeout=60_000)
-    page.wait_for_timeout(3000)  # wait for page to load
+    page.wait_for_timeout(3000)  # initial wait
 
-    # Detect business cards
-    cards = page.locator("div[role='article'], div.Nv2PK")
+    # Scroll sidebar to load all cards
+    last_count = 0
+    while True:
+        cards = page.locator("div[role='article'], div.Nv2PK")
+        page.evaluate(
+            "arguments[0].scrollIntoView()",
+            cards.nth(cards.count() - 1) if cards.count() else None
+        )
+        page.wait_for_timeout(1000)
+        if cards.count() == last_count or cards.count() >= limit:
+            break
+        last_count = cards.count()
+
     st.write(f"Found {cards.count()} cards")  # debug
 
     for i in range(min(cards.count(), limit)):
@@ -67,17 +77,40 @@ def scrape_maps(query, limit=30, email_lookup=True):
             card = cards.nth(i)
             card.click(timeout=5000)
             page.wait_for_timeout(1000)
-            
-            name = page.locator('h1').first.inner_text(timeout=2000)
+
+            # Safe extraction of each field
+            try:
+                name = page.locator('h1').first.inner_text(timeout=2000)
+            except:
+                name = ""
             if not name or name in seen:
                 continue
             seen.add(name)
 
-            website = page.locator('a[data-item-id="authority"]').first.get_attribute("href") if page.locator('a[data-item-id="authority"]').count() else ""
-            address = page.locator('button[data-item-id="address"]').first.inner_text(timeout=1500) if page.locator('button[data-item-id="address"]').count() else ""
-            phone_maps = page.locator('button[data-item-id^="phone:"]').first.inner_text(timeout=1500) if page.locator('button[data-item-id^="phone:"]').count() else ""
-            rating = page.locator('span.MW4etd').first.inner_text(timeout=1500) if page.locator('span.MW4etd').count() else ""
-            review_count = page.locator('span.UY7F9').first.inner_text(timeout=1500) if page.locator('span.UY7F9').count() else ""
+            try:
+                website = page.locator('a[data-item-id="authority"]').first.get_attribute("href") if page.locator('a[data-item-id="authority"]').count() else ""
+            except:
+                website = ""
+
+            try:
+                address = page.locator('button[data-item-id="address"]').first.inner_text(timeout=1500) if page.locator('button[data-item-id="address"]').count() else ""
+            except:
+                address = ""
+
+            try:
+                phone_maps = page.locator('button[data-item-id^="phone:"]').first.inner_text(timeout=1500) if page.locator('button[data-item-id^="phone:"]').count() else ""
+            except:
+                phone_maps = ""
+
+            try:
+                rating = page.locator('span.MW4etd').first.inner_text(timeout=1500) if page.locator('span.MW4etd').count() else ""
+            except:
+                rating = ""
+
+            try:
+                review_count = page.locator('span.UY7F9').first.inner_text(timeout=1500) if page.locator('span.UY7F9').count() else ""
+            except:
+                review_count = ""
 
             email_site, phone_site = ("", "")
             if email_lookup and website:
@@ -123,3 +156,4 @@ if st.button("Start Scraping"):
             st.download_button("⬇️ Download Excel", df_to_excel_bytes(df), "maps.xlsx")
         else:
             st.warning("No results found. Try adjusting the query.")
+
