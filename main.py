@@ -103,107 +103,98 @@
 
 
 
-
-
 import streamlit as st
 import pandas as pd
-import re, time
+import time
+import re
 from playwright.sync_api import sync_playwright
 
-# ================== REGEX for Email & Phone ==================
-EMAIL_REGEX = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
-PHONE_REGEX = r"\+?\d[\d\-\(\) ]{8,}\d"
+st.set_page_config(page_title="Google Maps Scraper 🚀", layout="wide")
 
-# ================== Email/Phone Extractor ==================
-import requests
-def extract_email_phone(website_url):
-    try:
-        resp = requests.get(website_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-        text = resp.text
-        emails = re.findall(EMAIL_REGEX, text)
-        phones = re.findall(PHONE_REGEX, text)
-        return emails[0] if emails else "", phones[0] if phones else ""
-    except:
-        return "", ""
-
-# ================== SCRAPER ==================
-def scrape_google_maps(query, limit=100, lookup=True):
-    results = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        page = browser.new_page()
-        search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
-        page.goto(search_url, timeout=60000)
-        page.wait_for_selector("div.Nv2PK", timeout=20000)
-
-        # Scroll loop to load more results
-        last_count = 0
-        for _ in range(20):  # scroll up to 20 times
-            page.mouse.wheel(0, 4000)
-            time.sleep(2)
-            cards = page.locator("div.Nv2PK")
-            new_count = cards.count()
-            if new_count == last_count:
-                break
-            last_count = new_count
-            if new_count >= limit:
-                break
-
-        cards = page.locator("div.Nv2PK")
-        total = min(cards.count(), limit)
-
-        for i in range(total):
-            try:
-                card = cards.nth(i)
-                card.click(timeout=5000)
-                page.wait_for_timeout(2000)
-
-                name = page.locator("h1.DUwDvf").inner_text() if page.locator("h1.DUwDvf").count() else ""
-                addr = page.locator("button[data-item-id*='address']").inner_text() if page.locator("button[data-item-id*='address']").count() else ""
-                phone = page.locator("button[data-item-id*='phone']").inner_text() if page.locator("button[data-item-id*='phone']").count() else ""
-                website = page.locator("a[data-item-id*='authority']").get_attribute("href") if page.locator("a[data-item-id*='authority']").count() else ""
-                rating = page.locator("span.F7nice").inner_text() if page.locator("span.F7nice").count() else ""
-
-                email, phone_site = "", ""
-                if lookup and website:
-                    email, phone_site = extract_email_phone(website)
-
-                results.append({
-                    "Business Name": name,
-                    "Address": addr,
-                    "Phone (Maps)": phone,
-                    "Phone (Website)": phone_site,
-                    "Email (Website)": email,
-                    "Website": website,
-                    "Rating": rating
-                })
-            except Exception as e:
-                print("Error:", e)
-                continue
-
-        browser.close()
-    return pd.DataFrame(results)
-
-# ================== STREAMLIT APP ==================
-st.set_page_config(page_title="Google Maps Scraper (Playwright)", layout="wide")
-st.title("🚀 Google Maps Scraper (No API, Full Results)")
+st.title("🗺️ Google Maps Scraper (Playwright + Streamlit)")
 
 query = st.text_input("🔎 Enter your query", "Hospitals in Bhopal")
 max_results = st.number_input("Maximum results", min_value=10, max_value=500, value=100, step=10)
-do_lookup = st.checkbox("Extract Email & Phone from Website", value=True)
+extract_email_phone = st.checkbox("Extract Email & Phone from Website", value=True)
 
 if st.button("Start Scraping"):
-    with st.spinner("⏳ Scraping Google Maps..."):
-        df = scrape_google_maps(query, int(max_results), lookup=do_lookup)
-        st.success(f"✅ Found {len(df)} results.")
-        st.dataframe(df, use_container_width=True)
+    st.info("⏳ Scraping in progress... please wait")
 
-        st.download_button("⬇ Download CSV", df.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="maps_scrape.csv", mime="text/csv")
-        st.download_button("⬇ Download Excel", df.to_excel("maps_scrape.xlsx", index=False),
-                           file_name="maps_scrape.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    results = []
 
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
+        page.goto(search_url)
+
+        # Scroll loop
+        prev_height = 0
+        while len(results) < max_results:
+            page.mouse.wheel(0, 10000)
+            time.sleep(3)
+
+            cards = page.query_selector_all('div[role="article"]')
+            for card in cards:
+                try:
+                    name = card.query_selector('div.fontHeadlineSmall').inner_text()
+                except:
+                    name = None
+                try:
+                    address = card.query_selector('div.fontBodyMedium').inner_text()
+                except:
+                    address = None
+                try:
+                    phone = card.query_selector('span[aria-label^="+91"]').inner_text()
+                except:
+                    phone = None
+
+                if name and not any(r["Business Name"] == name for r in results):
+                    results.append({
+                        "Business Name": name,
+                        "Address": address,
+                        "Phone": phone,
+                        "Website": None,
+                        "Email": None
+                    })
+
+            # Break if no new data is loading
+            curr_height = page.evaluate("document.body.scrollHeight")
+            if curr_height == prev_height:
+                break
+            prev_height = curr_height
+
+        browser.close()
+
+    df = pd.DataFrame(results)
+
+    # Optional Email/Phone extraction from websites
+    if extract_email_phone:
+        import requests
+        from bs4 import BeautifulSoup
+
+        for i, row in df.iterrows():
+            if row["Website"]:
+                try:
+                    r = requests.get(row["Website"], timeout=5)
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", r.text))
+                    phones = set(re.findall(r"\+91[0-9]{10}", r.text))
+                    if emails:
+                        df.at[i, "Email"] = list(emails)[0]
+                    if phones:
+                        df.at[i, "Phone"] = list(phones)[0]
+                except:
+                    pass
+
+    st.success(f"✅ Found {len(df)} results.")
+    st.dataframe(df)
+
+    # Download buttons
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇ Download CSV", csv, "maps_data.csv", "text/csv")
+
+    excel = df.to_excel("maps_data.xlsx", index=False)
+    with open("maps_data.xlsx", "rb") as f:
+        st.download_button("⬇ Download Excel", f, "maps_data.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
